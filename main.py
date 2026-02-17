@@ -2,6 +2,7 @@
 ChatList — главное окно и точка входа.
 """
 import sys
+import markdown
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -9,6 +10,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QTextEdit,
+    QTextBrowser,
     QTableWidget,
     QTableWidgetItem,
     QPushButton,
@@ -18,6 +20,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QProgressBar,
     QCheckBox,
+    QFrame,
+    QDialog,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -26,6 +30,40 @@ import db
 from models import get_active_models
 from network import send_prompt_to_all_models
 from models_dialog import ModelsSettingsDialog
+
+
+class MarkdownViewerDialog(QDialog):
+    """Диалог просмотра ответа с форматированием Markdown."""
+
+    def __init__(self, parent=None, title: str = "Ответ", text: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(500, 400)
+        self.resize(700, 500)
+        layout = QVBoxLayout(self)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        try:
+            body_html = markdown.markdown(text, extensions=["extra", "nl2br"])
+        except Exception:
+            body_html = f"<pre>{text}</pre>"
+        style = """
+        <style>
+        body { font-family: sans-serif; padding: 12px; line-height: 1.5; }
+        code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; }
+        pre { background: #f5f5f5; padding: 12px; overflow-x: auto; border-radius: 4px; }
+        pre code { background: none; padding: 0; }
+        h1,h2,h3 { margin-top: 1em; }
+        table { border-collapse: collapse; margin: 8px 0; }
+        th, td { border: 1px solid #ccc; padding: 6px 12px; }
+        </style>
+        """
+        html = f"<!DOCTYPE html><html><head>{style}</head><body>{body_html}</body></html>"
+        browser.setHtml(html)
+        layout.addWidget(browser)
+        close_btn = QPushButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
 
 
 class SendWorker(QThread):
@@ -107,8 +145,8 @@ class ChatListWindow(QMainWindow):
         # --- Зона таблицы результатов ---
         results_label = QLabel("Результаты:")
         layout.addWidget(results_label)
-        self.results_table = QTableWidget(0, 3)
-        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ", "Выбрано"])
+        self.results_table = QTableWidget(0, 4)
+        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ", "Выбрано", ""])
         self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         layout.addWidget(self.results_table)
 
@@ -232,10 +270,18 @@ class ChatListWindow(QMainWindow):
 
     def _refresh_results_table(self):
         self.results_table.setRowCount(len(self._temp_results))
+        row_height = 150
         for i, row in enumerate(self._temp_results):
+            self.results_table.setRowHeight(i, row_height)
             self.results_table.setItem(i, 0, QTableWidgetItem(row.get("model_name", "")))
             resp = row.get("response", "")
-            self.results_table.setItem(i, 1, QTableWidgetItem(resp))
+            # Поле ответа — многострочный редактор (только чтение)
+            resp_edit = QTextEdit()
+            resp_edit.setPlainText(resp)
+            resp_edit.setReadOnly(True)
+            resp_edit.setFrameShape(QFrame.NoFrame)
+            resp_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.results_table.setCellWidget(i, 1, resp_edit)
 
             # Чекбокс "Выбрано"
             cb = QCheckBox()
@@ -246,7 +292,22 @@ class ChatListWindow(QMainWindow):
             cell_layout.addWidget(cb)
             cell_layout.setContentsMargins(4, 0, 0, 0)
             self.results_table.setCellWidget(i, 2, cell_widget)
+
+            # Кнопка "Открыть"
+            open_btn = QPushButton("Открыть")
+            open_btn.clicked.connect(lambda checked, idx=i: self._on_open_response(idx))
+            self.results_table.setCellWidget(i, 3, open_btn)
         self.results_table.resizeColumnsToContents()
+
+    def _on_open_response(self, row_idx: int):
+        """Открывает ответ в отдельном окне с форматированным Markdown."""
+        if not (0 <= row_idx < len(self._temp_results)):
+            return
+        row = self._temp_results[row_idx]
+        model_name = row.get("model_name", "")
+        response = row.get("response", "")
+        title = f"Ответ: {model_name}"
+        MarkdownViewerDialog(self, title, response).exec_()
 
     def _on_selection_changed(self, row_idx: int, state: int):
         if 0 <= row_idx < len(self._temp_results):
