@@ -40,9 +40,16 @@ def init_db() -> None:
             name TEXT NOT NULL,
             api_url TEXT NOT NULL,
             api_id TEXT NOT NULL UNIQUE,
+            model TEXT DEFAULT 'gpt-3.5-turbo',
             is_active INTEGER DEFAULT 1
         )
     """)
+    # Миграция: добавить колонку model для существующих БД
+    try:
+        cur.execute("ALTER TABLE models ADD COLUMN model TEXT DEFAULT 'gpt-3.5-turbo'")
+        cur.execute("UPDATE models SET model = 'gpt-3.5-turbo' WHERE model IS NULL")
+    except sqlite3.OperationalError:
+        pass
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS results (
@@ -65,6 +72,21 @@ def init_db() -> None:
             value TEXT DEFAULT ''
         )
     """)
+
+    # Начальная модель OpenRouter, если таблица пуста
+    cur.execute("SELECT COUNT(*) FROM models")
+    if cur.fetchone()[0] == 0:
+        cur.execute(
+            """INSERT INTO models (name, api_url, api_id, model, is_active)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                "GPT-3.5 (OpenRouter)",
+                "https://openrouter.ai/api/v1/chat/completions",
+                "OPENROUTER_API_KEY",
+                "openai/gpt-3.5-turbo",
+                1,
+            ),
+        )
 
     conn.commit()
     conn.close()
@@ -135,13 +157,13 @@ def prompt_delete(pid: int) -> bool:
 
 # --- CRUD: models ---
 
-def model_create(name: str, api_url: str, api_id: str, is_active: int = 1) -> int:
+def model_create(name: str, api_url: str, api_id: str, model: str = "gpt-3.5-turbo", is_active: int = 1) -> int:
     """Создаёт модель. Возвращает id."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO models (name, api_url, api_id, is_active) VALUES (?, ?, ?, ?)",
-        (name, api_url, api_id, is_active),
+        "INSERT INTO models (name, api_url, api_id, model, is_active) VALUES (?, ?, ?, ?, ?)",
+        (name, api_url, api_id, model, is_active),
     )
     mid = cur.lastrowid
     conn.commit()
@@ -154,7 +176,7 @@ def model_get(mid: int) -> Optional[dict]:
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, name, api_url, api_id, is_active FROM models WHERE id = ?", (mid,)
+        "SELECT id, name, api_url, api_id, model, is_active FROM models WHERE id = ?", (mid,)
     )
     row = cur.fetchone()
     conn.close()
@@ -168,33 +190,33 @@ def model_list(active_only: bool = False, search: str = "") -> list[dict]:
     if active_only:
         if search:
             cur.execute(
-                "SELECT id, name, api_url, api_id, is_active FROM models WHERE is_active = 1 AND (name LIKE ? OR api_id LIKE ?)",
+                "SELECT id, name, api_url, api_id, model, is_active FROM models WHERE is_active = 1 AND (name LIKE ? OR api_id LIKE ?)",
                 (f"%{search}%", f"%{search}%"),
             )
         else:
             cur.execute(
-                "SELECT id, name, api_url, api_id, is_active FROM models WHERE is_active = 1"
+                "SELECT id, name, api_url, api_id, model, is_active FROM models WHERE is_active = 1"
             )
     else:
         if search:
             cur.execute(
-                "SELECT id, name, api_url, api_id, is_active FROM models WHERE name LIKE ? OR api_id LIKE ?",
+                "SELECT id, name, api_url, api_id, model, is_active FROM models WHERE name LIKE ? OR api_id LIKE ?",
                 (f"%{search}%", f"%{search}%"),
             )
         else:
-            cur.execute("SELECT id, name, api_url, api_id, is_active FROM models")
+            cur.execute("SELECT id, name, api_url, api_id, model, is_active FROM models")
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def model_update(mid: int, name: str, api_url: str, api_id: str, is_active: int) -> bool:
+def model_update(mid: int, name: str, api_url: str, api_id: str, model: str, is_active: int) -> bool:
     """Обновляет модель."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE models SET name = ?, api_url = ?, api_id = ?, is_active = ? WHERE id = ?",
-        (name, api_url, api_id, is_active, mid),
+        "UPDATE models SET name = ?, api_url = ?, api_id = ?, model = ?, is_active = ? WHERE id = ?",
+        (name, api_url, api_id, model, is_active, mid),
     )
     ok = cur.rowcount > 0
     conn.commit()

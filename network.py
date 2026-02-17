@@ -41,8 +41,9 @@ def send_prompt_to_model(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    model_id = getattr(model, "model", None) or "gpt-3.5-turbo"
     payload = {
-        "model": "gpt-3.5-turbo",  # можно сделать настраиваемым
+        "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
     }
 

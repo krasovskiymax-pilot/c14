@@ -19,6 +19,7 @@ class Model:
     name: str
     api_url: str
     api_id: str
+    model: str  # ID модели для API (напр. openai/gpt-3.5-turbo для OpenRouter)
     is_active: int
 
 
@@ -28,6 +29,7 @@ def _row_to_model(row: dict) -> Model:
         name=row["name"],
         api_url=row["api_url"],
         api_id=row["api_id"],
+        model=row.get("model", "gpt-3.5-turbo") or "gpt-3.5-turbo",
         is_active=row["is_active"],
     )
 
@@ -55,16 +57,16 @@ def get_api_key(api_id: str) -> Optional[str]:
     return os.getenv(api_id)
 
 
-def add_model(name: str, api_url: str, api_id: str, is_active: int = 1) -> int:
+def add_model(name: str, api_url: str, api_id: str, model: str = "gpt-3.5-turbo", is_active: int = 1) -> int:
     """Добавляет модель. Возвращает id."""
-    return db.model_create(name, api_url, api_id, is_active)
+    return db.model_create(name, api_url, api_id, model, is_active)
 
 
 def update_model(
-    model_id: int, name: str, api_url: str, api_id: str, is_active: int
+    model_id: int, name: str, api_url: str, api_id: str, model: str, is_active: int
 ) -> bool:
     """Обновляет модель."""
-    return db.model_update(model_id, name, api_url, api_id, is_active)
+    return db.model_update(model_id, name, api_url, api_id, model, is_active)
 
 
 def delete_model(model_id: int) -> bool:
