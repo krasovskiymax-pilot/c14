@@ -3,13 +3,18 @@
 """
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
 
 import db
 
+# Сначала .env, затем .env.local (локальные ключи имеют приоритет)
 load_dotenv()
+env_local = Path(__file__).parent / ".env.local"
+if env_local.exists():
+    load_dotenv(env_local, override=True)
 
 
 @dataclass
