@@ -30,6 +30,7 @@ import db
 from models import get_active_models
 from network import send_prompt_to_all_models
 from models_dialog import ModelsSettingsDialog
+from prompts_dialog import PromptsDialog
 
 
 class MarkdownViewerDialog(QDialog):
@@ -156,6 +157,9 @@ class ChatListWindow(QMainWindow):
         menubar = self.menuBar()
         file_menu = menubar.addMenu("Файл")
         file_menu.addAction("Выход", self.close)
+
+        data_menu = menubar.addMenu("Данные")
+        data_menu.addAction("Промты...", self._on_prompts_dialog)
 
         settings_menu = menubar.addMenu("Настройки")
         settings_menu.addAction("Модели...", self._on_models_settings)
@@ -312,6 +316,11 @@ class ChatListWindow(QMainWindow):
     def _on_selection_changed(self, row_idx: int, state: int):
         if 0 <= row_idx < len(self._temp_results):
             self._temp_results[row_idx]["selected"] = state == Qt.Checked
+
+    def _on_prompts_dialog(self):
+        d = PromptsDialog(self)
+        d.exec_()
+        self._load_prompts_combo()
 
     def _on_models_settings(self):
         d = ModelsSettingsDialog(self)
