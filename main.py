@@ -137,10 +137,24 @@ class ChatListWindow(QMainWindow):
         self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ"])
         self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.results_table.setWordWrap(True)  # многострочный текст в ячейках
+        self.results_table.cellDoubleClicked.connect(lambda r, c: self._on_open_response())
         self.results_table.horizontalHeader().sectionResized.connect(
             lambda *_: self.results_table.resizeRowsToContents()
         )  # при изменении ширины — пересчёт высоты строк
         layout.addWidget(self.results_table)
+
+        # Кнопки под таблицей результатов
+        results_btn_layout = QHBoxLayout()
+        self.btn_open = QPushButton("Открыть")
+        self.btn_open.clicked.connect(self._on_open_response)
+        self.btn_open.setToolTip("Открыть выбранный ответ в отдельном окне")
+        results_btn_layout.addWidget(self.btn_open)
+        clear_results_btn = QPushButton("Очистить")
+        clear_results_btn.clicked.connect(self._on_clear_results)
+        clear_results_btn.setToolTip("Очистить таблицу результатов")
+        results_btn_layout.addWidget(clear_results_btn)
+        results_btn_layout.addStretch()
+        layout.addLayout(results_btn_layout)
 
         self.setCentralWidget(central)
 
@@ -319,6 +333,24 @@ class ChatListWindow(QMainWindow):
         if len(s) > max_len:
             return s[:max_len] + "…"
         return s
+
+    def _on_open_response(self):
+        """Открыть выбранный ответ в диалоге просмотра Markdown."""
+        row = self.results_table.currentRow()
+        if row < 0 or row >= len(self._temp_results):
+            QMessageBox.information(self, "Выбор", "Выберите строку с ответом для просмотра.")
+            return
+        r = self._temp_results[row]
+        title = f"Ответ: {r.get('model_name', 'Модель')}"
+        text = r.get("response", "")
+        d = MarkdownViewerDialog(self, title=title, text=text)
+        d.exec_()
+
+    def _on_clear_results(self):
+        """Очистить таблицу результатов."""
+        self._temp_results.clear()
+        self._refresh_results_table()
+        self.statusBar().showMessage("Результаты очищены")
 
     def _refresh_results_table(self):
         self.results_table.setRowCount(len(self._temp_results))
