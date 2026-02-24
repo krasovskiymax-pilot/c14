@@ -1,19 +1,20 @@
 """
-Диалог управления таблицей «Промты» с CRUD.
+Диалог управления «Промты» с CRUD.
+Таблица и кнопки Добавить / Изменить / Удалить.
 """
 from PyQt5.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
-    QTableWidget,
-    QTableWidgetItem,
     QPushButton,
     QMessageBox,
-    QHeaderView,
-    QAbstractItemView,
     QFormLayout,
     QLineEdit,
     QTextEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
 )
 from PyQt5.QtCore import Qt
 
@@ -69,15 +70,16 @@ class PromptEditDialog(QDialog):
 
 
 class PromptsDialog(QDialog):
-    """Диалог таблицы «Промты» с кнопками CRUD."""
+    """Диалог «Промты» с таблицей и кнопками CRUD."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Промты")
         self.setMinimumSize(600, 400)
-        self.resize(750, 500)
+        self.resize(700, 500)
+        self.prompts: list[dict] = []
         self._setup_ui()
-        self._refresh_table()
+        self._refresh_display()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -96,61 +98,71 @@ class PromptsDialog(QDialog):
         crud_layout.addStretch()
         layout.addLayout(crud_layout)
 
-        # Таблица
+        # Таблица промтов
         self.table = QTableWidget()
-        self.table.setHorizontalHeaderLabels(["ID", "Дата", "Текст", "Теги"])
+        self.table.setHorizontalHeaderLabels(["ID", "Создан", "Текст", "Теги"])
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         layout.addWidget(self.table)
 
         close_btn = QPushButton("Закрыть")
         close_btn.clicked.connect(self.accept)
         layout.addWidget(close_btn)
 
-    def _refresh_table(self):
-        prompts = db.prompt_list()
-        self.table.setRowCount(len(prompts))
-        for i, p in enumerate(prompts):
-            self.table.setItem(i, 0, QTableWidgetItem(str(p["id"])))
-            self.table.setItem(i, 1, QTableWidgetItem(str(p.get("created", ""))))
-            text = p.get("text", "")
-            display = (text[:100] + "…") if len(text) > 100 else text
-            self.table.setItem(i, 2, QTableWidgetItem(display))
-            self.table.setItem(i, 3, QTableWidgetItem(p.get("tags", "") or ""))
-        self.table.resizeColumnsToContents()
+    def _refresh_display(self):
+        try:
+            self.prompts = db.prompt_list()
+        except Exception as e:
+            self.prompts = []
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить промты: {e}")
+            return
+        self.table.setRowCount(len(self.prompts))
+        for i, p in enumerate(self.prompts):
+            text = str(p.get("text", "") or "").replace("\x00", "")
+            if len(text) > 200:
+                text = text[:200] + "…"
+            self.table.setItem(i, 0, QTableWidgetItem(str(p.get("id", ""))))
+            self.table.setItem(i, 1, QTableWidgetItem(str(p.get("created", "") or "")[:19]))
+            self.table.setItem(i, 2, QTableWidgetItem(text))
+            self.table.setItem(i, 3, QTableWidgetItem(str(p.get("tags", "") or "")))
 
     def _selected_id(self) -> int | None:
         row = self.table.currentRow()
         if row < 0:
             return None
         item = self.table.item(row, 0)
-        return int(item.text()) if item else None
+        if not item:
+            return None
+        try:
+            return int(item.text())
+        except ValueError:
+            return None
 
     def _on_add(self):
         d = PromptEditDialog(self)
         if d.exec_() == QDialog.Accepted:
             data = d.get_data()
             db.prompt_create(data["text"], data["tags"])
-            self._refresh_table()
+            self._refresh_display()
             QMessageBox.information(self, "Готово", "Промт добавлен.")
 
     def _on_edit(self):
         pid = self._selected_id()
         if pid is None:
-            QMessageBox.information(self, "Выбор", "Выберите промт для редактирования.")
+            QMessageBox.information(self, "Выбор", "Кликните на строку для редактирования.")
             return
         d = PromptEditDialog(self, pid)
         if d.exec_() == QDialog.Accepted:
             data = d.get_data()
             db.prompt_update(pid, data["text"], data["tags"])
-            self._refresh_table()
+            self._refresh_display()
             QMessageBox.information(self, "Готово", "Промт обновлён.")
 
     def _on_delete(self):
         pid = self._selected_id()
         if pid is None:
-            QMessageBox.information(self, "Выбор", "Выберите промт для удаления.")
+            QMessageBox.information(self, "Выбор", "Кликните на строку для удаления.")
             return
         if QMessageBox.question(
             self, "Подтверждение", "Удалить выбранный промт?",
@@ -158,7 +170,7 @@ class PromptsDialog(QDialog):
         ) != QMessageBox.Yes:
             return
         if db.prompt_delete(pid):
-            self._refresh_table()
+            self._refresh_display()
             QMessageBox.information(self, "Готово", "Промт удалён.")
         else:
             QMessageBox.warning(self, "Ошибка", "Не удалось удалить промт.")

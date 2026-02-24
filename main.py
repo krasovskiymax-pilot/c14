@@ -2,6 +2,9 @@
 ChatList — главное окно и точка входа.
 """
 import sys
+from datetime import datetime
+from pathlib import Path
+
 import markdown
 from PyQt5.QtWidgets import (
     QApplication,
@@ -19,12 +22,10 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QComboBox,
     QProgressBar,
-    QCheckBox,
-    QFrame,
     QDialog,
+    QCheckBox,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt, QTimer
 
 import db
 from models import get_active_models
@@ -67,25 +68,6 @@ class MarkdownViewerDialog(QDialog):
         layout.addWidget(close_btn)
 
 
-class SendWorker(QThread):
-    """Рабочий поток для отправки запросов к API."""
-    finished = pyqtSignal(list)  # list of dicts
-
-    def __init__(self, prompt: str):
-        super().__init__()
-        self.prompt = prompt
-
-    def run(self):
-        models = get_active_models()
-        results = send_prompt_to_all_models(models, self.prompt)
-        # Преобразуем в list[dict] для временной таблицы
-        data = [
-            {"model_id": r[0], "model_name": r[1], "response": r[2] or "", "selected": False}
-            for r in results
-        ]
-        self.finished.emit(data)
-
-
 class ChatListWindow(QMainWindow):
     """Главное окно ChatList."""
 
@@ -94,7 +76,6 @@ class ChatListWindow(QMainWindow):
         db.init_db()
         self._temp_results: list[dict] = []
         self._current_prompt_id: int | None = None
-        self._send_worker: SendWorker | None = None
         self._setup_ui()
         self._connect_signals()
         self._load_prompts_combo()
@@ -143,12 +124,22 @@ class ChatListWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
+        # --- Опция сохранения в файл ---
+        self.save_to_file_cb = QCheckBox("Сохранять результаты в файл (без отображения в таблице)")
+        self.save_to_file_cb.setToolTip("Избегает возможных крэшей при отображении в таблице")
+        self.save_to_file_cb.setChecked(True)  # По умолчанию — в файл (стабильнее)
+        layout.addWidget(self.save_to_file_cb)
+
         # --- Зона таблицы результатов ---
         results_label = QLabel("Результаты:")
         layout.addWidget(results_label)
-        self.results_table = QTableWidget(0, 4)
-        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ", "Выбрано", ""])
+        self.results_table = QTableWidget(0, 2)
+        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ"])
         self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.results_table.setWordWrap(True)  # многострочный текст в ячейках
+        self.results_table.horizontalHeader().sectionResized.connect(
+            lambda *_: self.results_table.resizeRowsToContents()
+        )  # при изменении ширины — пересчёт высоты строк
         layout.addWidget(self.results_table)
 
         self.setCentralWidget(central)
@@ -217,54 +208,92 @@ class ChatListWindow(QMainWindow):
         self.btn_send.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.statusBar().showMessage("Отправка запросов…")
+        QApplication.processEvents()
 
-        self._send_worker = SendWorker(prompt)
-        self._send_worker.finished.connect(self._on_send_finished)
-        self._send_worker.start()
+        # Выполняем в главном потоке
+        try:
+            results = send_prompt_to_all_models(models, prompt)
+            data = [
+                {"model_id": r[0], "model_name": r[1], "response": r[2] or "", "selected": False}
+                for r in results
+            ]
+            # Откладываем обновление UI (снижает риск крэша Qt)
+            QTimer.singleShot(0, lambda: self._on_send_finished(data))
+        except Exception as e:
+            QTimer.singleShot(0, lambda: self._on_send_finished([
+                {"model_id": 0, "model_name": "Ошибка", "response": str(e), "selected": False}
+            ]))
+
+    def _save_results_to_file(self, data: list) -> Path | None:
+        """Сохраняет результаты в файл. Возвращает путь к файлу или None."""
+        if not data:
+            return None
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = Path(__file__).parent / "results"
+        out_dir.mkdir(exist_ok=True)
+        path = out_dir / f"chatlist_{stamp}.txt"
+        lines = []
+        for row in data:
+            name = row.get("model_name", "?")
+            resp = row.get("response", "")
+            lines.append(f"{'='*60}\nМодель: {name}\n{'='*60}\n{resp}\n")
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
 
     def _on_send_finished(self, data: list):
-        self._send_worker = None
-        self.btn_send.setEnabled(True)
-        self.progress_bar.setVisible(False)
-        self._temp_results = data
-        self._refresh_results_table()
-        success = sum(1 for r in data if r.get("response") and not r["response"].startswith("Ошибка") and not r["response"].startswith("Переменная"))
-        self.statusBar().showMessage(f"Готово. Получено ответов: {success} из {len(data)}.")
+        try:
+            self.btn_send.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            self._temp_results = data or []
+            err_prefixes = ("Ошибка", "Переменная", "HTTP", "Неверный", "Таймаут")
+            success = sum(
+                1 for r in self._temp_results
+                if r.get("response") and not any(r["response"].startswith(p) for p in err_prefixes)
+            )
+
+            if self.save_to_file_cb.isChecked():
+                path = self._save_results_to_file(self._temp_results)
+                if path:
+                    self.statusBar().showMessage(f"Сохранено в {path}")
+                    QMessageBox.information(
+                        self, "Готово",
+                        f"Результаты сохранены в файл:\n{path}\n\n"
+                        f"Ответов: {success} из {len(self._temp_results)}.",
+                    )
+                else:
+                    self.statusBar().showMessage("Нет данных для сохранения")
+            else:
+                self._refresh_results_table()
+                self.statusBar().showMessage(f"Готово. Получено ответов: {success} из {len(self._temp_results)}.")
+        except Exception as e:
+            self.btn_send.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(
+                self, "Ошибка",
+                f"Ошибка при обработке результатов:\n{e}",
+            )
 
     def _on_save(self):
-        selected = [r for r in self._temp_results if r.get("selected")]
-        if not selected:
-            QMessageBox.information(
-                self,
-                "Сохранение",
-                "Отметьте галочкой строки для сохранения.",
-            )
-            return
-
+        """Сохраняет текущий промт и все результаты в БД."""
         prompt_text = self.prompt_edit.toPlainText().strip()
         if not prompt_text:
-            QMessageBox.warning(self, "Внимание", "Введите или выберите промт перед сохранением.")
+            QMessageBox.warning(self, "Внимание", "Введите промт перед сохранением.")
             return
-
+        if not self._temp_results:
+            QMessageBox.information(self, "Сохранение", "Сначала отправьте запрос и получите результаты.")
+            return
         try:
             if self._current_prompt_id is None:
                 self._current_prompt_id = db.prompt_create(prompt_text)
                 self._load_prompts_combo()
-
-            for r in selected:
+            for r in self._temp_results:
                 db.result_create(self._current_prompt_id, r["model_id"], r["response"])
-
-            self._temp_results = [x for x in self._temp_results if not x.get("selected")]
-            self._refresh_results_table()
-            self.statusBar().showMessage(f"Сохранено строк: {len(selected)}")
-            QMessageBox.information(self, "Сохранено", f"Сохранено результатов: {len(selected)}.")
+            self.statusBar().showMessage(f"Сохранено: промт + {len(self._temp_results)} результатов")
+            QMessageBox.information(self, "Сохранено", f"Сохранено результатов: {len(self._temp_results)}.")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить: {e}")
-            self.statusBar().showMessage("Ошибка сохранения")
 
     def _on_new(self):
-        if self._send_worker and self._send_worker.isRunning():
-            return
         self._temp_results.clear()
         self._current_prompt_id = None
         self._refresh_results_table()
@@ -272,55 +301,48 @@ class ChatListWindow(QMainWindow):
         self.prompts_combo.setCurrentIndex(0)
         self.statusBar().showMessage("Новый запрос")
 
+    def _sanitize_for_display(self, text: str) -> str:
+        """Удаляет символы, способные вызвать крэш Qt."""
+        if not text:
+            return ""
+        result = []
+        for c in str(text):
+            code = ord(c)
+            # Разрешаем печатные символы, переносы; исключаем null, суррогаты, замену
+            if code == 0 or (0xD800 <= code <= 0xDFFF) or code == 0xFFFD:
+                continue
+            if c >= " " or c in "\n\r\t":
+                result.append(c)
+        s = "".join(result)
+        # Лимит увеличен, чтобы показывать весь ответ (многострочное отображение в таблице)
+        max_len = 50000
+        if len(s) > max_len:
+            return s[:max_len] + "…"
+        return s
+
     def _refresh_results_table(self):
         self.results_table.setRowCount(len(self._temp_results))
-        row_height = 150
         for i, row in enumerate(self._temp_results):
-            self.results_table.setRowHeight(i, row_height)
-            self.results_table.setItem(i, 0, QTableWidgetItem(row.get("model_name", "")))
-            resp = row.get("response", "")
-            # Поле ответа — многострочный редактор (только чтение)
-            resp_edit = QTextEdit()
-            resp_edit.setPlainText(resp)
-            resp_edit.setReadOnly(True)
-            resp_edit.setFrameShape(QFrame.NoFrame)
-            resp_edit.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.results_table.setCellWidget(i, 1, resp_edit)
-
-            # Чекбокс "Выбрано"
-            cb = QCheckBox()
-            cb.setChecked(row.get("selected", False))
-            cb.stateChanged.connect(lambda s, idx=i: self._on_selection_changed(idx, s))
-            cell_widget = QWidget()
-            cell_layout = QHBoxLayout(cell_widget)
-            cell_layout.addWidget(cb)
-            cell_layout.setContentsMargins(4, 0, 0, 0)
-            self.results_table.setCellWidget(i, 2, cell_widget)
-
-            # Кнопка "Открыть"
-            open_btn = QPushButton("Открыть")
-            open_btn.clicked.connect(lambda checked, idx=i: self._on_open_response(idx))
-            self.results_table.setCellWidget(i, 3, open_btn)
-        self.results_table.resizeColumnsToContents()
-
-    def _on_open_response(self, row_idx: int):
-        """Открывает ответ в отдельном окне с форматированным Markdown."""
-        if not (0 <= row_idx < len(self._temp_results)):
-            return
-        row = self._temp_results[row_idx]
-        model_name = row.get("model_name", "")
-        response = row.get("response", "")
-        title = f"Ответ: {model_name}"
-        MarkdownViewerDialog(self, title, response).exec_()
-
-    def _on_selection_changed(self, row_idx: int, state: int):
-        if 0 <= row_idx < len(self._temp_results):
-            self._temp_results[row_idx]["selected"] = state == Qt.Checked
+            try:
+                name = str(row.get("model_name", ""))[:80]
+                resp = self._sanitize_for_display(str(row.get("response", "")))
+                self.results_table.setItem(i, 0, QTableWidgetItem(name))
+                self.results_table.setItem(i, 1, QTableWidgetItem(resp))
+            except Exception:
+                self.results_table.setItem(i, 0, QTableWidgetItem("?"))
+                self.results_table.setItem(i, 1, QTableWidgetItem("(ошибка отображения)"))
+        self.results_table.resizeRowsToContents()  # высота строк по содержимому
 
     def _on_prompts_dialog(self):
-        d = PromptsDialog(self)
-        d.exec_()
-        self._load_prompts_combo()
+        try:
+            d = PromptsDialog(self)
+            d.exec_()
+            self._load_prompts_combo()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Ошибка",
+                f"Не удалось открыть «Промты»:\n{e}",
+            )
 
     def _on_models_settings(self):
         d = ModelsSettingsDialog(self)
@@ -335,7 +357,22 @@ class ChatListWindow(QMainWindow):
         )
 
 
+def _excepthook(exc_type, exc_value, exc_tb):
+    """Перехват необработанных исключений — показывает диалог вместо тихого выхода."""
+    import traceback
+    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    print(msg, file=sys.stderr)
+    try:
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+        app = QApplication.instance()
+        if app:
+            QMessageBox.critical(None, "Ошибка", f"Критическая ошибка:\n\n{exc_value}")
+    except Exception:
+        pass
+
+
 def main():
+    sys.excepthook = _excepthook
     app = QApplication(sys.argv)
     app.setApplicationName("ChatList")
     window = ChatListWindow()

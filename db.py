@@ -39,7 +39,7 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             api_url TEXT NOT NULL,
-            api_id TEXT NOT NULL UNIQUE,
+            api_id TEXT NOT NULL,
             model TEXT DEFAULT 'gpt-3.5-turbo',
             is_active INTEGER DEFAULT 1
         )
@@ -48,6 +48,27 @@ def init_db() -> None:
     try:
         cur.execute("ALTER TABLE models ADD COLUMN model TEXT DEFAULT 'gpt-3.5-turbo'")
         cur.execute("UPDATE models SET model = 'gpt-3.5-turbo' WHERE model IS NULL")
+    except sqlite3.OperationalError:
+        pass
+
+    # Миграция: убрать UNIQUE с api_id (несколько моделей могут использовать один ключ, напр. OpenRouter)
+    try:
+        cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='models'")
+        row = cur.fetchone()
+        if row and "UNIQUE" in (row[0] or ""):
+            cur.execute("""
+                CREATE TABLE models_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    api_url TEXT NOT NULL,
+                    api_id TEXT NOT NULL,
+                    model TEXT DEFAULT 'gpt-3.5-turbo',
+                    is_active INTEGER DEFAULT 1
+                )
+            """)
+            cur.execute("INSERT INTO models_new SELECT id, name, api_url, api_id, model, is_active FROM models")
+            cur.execute("DROP TABLE models")
+            cur.execute("ALTER TABLE models_new RENAME TO models")
     except sqlite3.OperationalError:
         pass
 
