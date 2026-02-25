@@ -26,12 +26,21 @@ from PyQt5.QtWidgets import (
     QCheckBox,
 )
 from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QIcon
 
 import db
 from models import get_active_models
 from network import send_prompt_to_all_models
 from models_dialog import ModelsSettingsDialog
 from prompts_dialog import PromptsDialog
+from prompt_assistant_dialog import PromptImproveDialog
+from settings_dialog import (
+    SettingsDialog,
+    get_theme,
+    get_font_size,
+    DARK_STYLESHEET,
+    THEME_DARK,
+)
 
 
 class MarkdownViewerDialog(QDialog):
@@ -79,6 +88,7 @@ class ChatListWindow(QMainWindow):
         self._setup_ui()
         self._connect_signals()
         self._load_prompts_combo()
+        self._apply_app_theme_and_font()  # тема и шрифт из БД
 
     def _setup_ui(self):
         self.setWindowTitle("ChatList")
@@ -110,9 +120,13 @@ class ChatListWindow(QMainWindow):
         # --- Кнопки управления ---
         btn_layout = QHBoxLayout()
         self.btn_send = QPushButton("Отправить")
+        self.btn_improve = QPushButton("Улучшить промт")
+        self.btn_improve.clicked.connect(self._on_improve_prompt)
+        self.btn_improve.setToolTip("Улучшить текст промта с помощью ИИ")
         self.btn_save = QPushButton("Сохранить")
         self.btn_new = QPushButton("Новый запрос")
         btn_layout.addWidget(self.btn_send)
+        btn_layout.addWidget(self.btn_improve)
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_new)
         btn_layout.addStretch()
@@ -124,18 +138,13 @@ class ChatListWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
-        # --- Опция сохранения в файл ---
-        self.save_to_file_cb = QCheckBox("Сохранять результаты в файл (без отображения в таблице)")
-        self.save_to_file_cb.setToolTip("Избегает возможных крэшей при отображении в таблице")
-        self.save_to_file_cb.setChecked(True)  # По умолчанию — в файл (стабильнее)
-        layout.addWidget(self.save_to_file_cb)
-
         # --- Зона таблицы результатов ---
         results_label = QLabel("Результаты:")
         layout.addWidget(results_label)
-        self.results_table = QTableWidget(0, 2)
-        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ"])
-        self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.results_table = QTableWidget(0, 3)
+        self.results_table.setHorizontalHeaderLabels(["Выбрать", "Модель", "Ответ"])
+        self.results_table.setColumnWidth(0, 80)  # узкая колонка для чекбоксов
+        self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.results_table.setWordWrap(True)  # многострочный текст в ячейках
         self.results_table.cellDoubleClicked.connect(lambda r, c: self._on_open_response())
         self.results_table.horizontalHeader().sectionResized.connect(
@@ -145,6 +154,10 @@ class ChatListWindow(QMainWindow):
 
         # Кнопки под таблицей результатов
         results_btn_layout = QHBoxLayout()
+        self.btn_save_selected = QPushButton("Сохранить выбранные")
+        self.btn_save_selected.clicked.connect(self._on_save_selected)
+        self.btn_save_selected.setToolTip("Сохранить в БД только отмеченные ответы")
+        results_btn_layout.addWidget(self.btn_save_selected)
         self.btn_open = QPushButton("Открыть")
         self.btn_open.clicked.connect(self._on_open_response)
         self.btn_open.setToolTip("Открыть выбранный ответ в отдельном окне")
@@ -167,6 +180,7 @@ class ChatListWindow(QMainWindow):
         data_menu.addAction("Промты...", self._on_prompts_dialog)
 
         settings_menu = menubar.addMenu("Настройки")
+        settings_menu.addAction("Параметры...", self._on_settings_dialog)
         settings_menu.addAction("Модели...", self._on_models_settings)
 
         help_menu = menubar.addMenu("Справка")
@@ -195,6 +209,17 @@ class ChatListWindow(QMainWindow):
             if p:
                 self.prompt_edit.setPlainText(p["text"])
                 self._current_prompt_id = pid
+
+    def _on_improve_prompt(self):
+        text = self.prompt_edit.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, "Подсказка", "Введите текст промта для улучшения.")
+            return
+        def on_substitute(improved: str):
+            self.prompt_edit.setPlainText(improved)
+            self.statusBar().showMessage("Промт подставлен")
+        d = PromptImproveDialog(self, original_text=text, on_substitute=on_substitute)
+        d.exec_()
 
     def _on_clear_prompt(self):
         self.prompts_combo.setCurrentIndex(0)
@@ -265,20 +290,8 @@ class ChatListWindow(QMainWindow):
                 if r.get("response") and not any(r["response"].startswith(p) for p in err_prefixes)
             )
 
-            if self.save_to_file_cb.isChecked():
-                path = self._save_results_to_file(self._temp_results)
-                if path:
-                    self.statusBar().showMessage(f"Сохранено в {path}")
-                    QMessageBox.information(
-                        self, "Готово",
-                        f"Результаты сохранены в файл:\n{path}\n\n"
-                        f"Ответов: {success} из {len(self._temp_results)}.",
-                    )
-                else:
-                    self.statusBar().showMessage("Нет данных для сохранения")
-            else:
-                self._refresh_results_table()
-                self.statusBar().showMessage(f"Готово. Получено ответов: {success} из {len(self._temp_results)}.")
+            self._refresh_results_table()
+            self.statusBar().showMessage(f"Готово. Получено ответов: {success} из {len(self._temp_results)}.")
         except Exception as e:
             self.btn_send.setEnabled(True)
             self.progress_bar.setVisible(False)
@@ -286,6 +299,30 @@ class ChatListWindow(QMainWindow):
                 self, "Ошибка",
                 f"Ошибка при обработке результатов:\n{e}",
             )
+
+    def _on_save_selected(self):
+        """Сохраняет в БД только выбранные ответы."""
+        selected = [r for r in self._temp_results if r.get("selected")]
+        if not selected:
+            QMessageBox.information(
+                self, "Выбор",
+                "Отметьте галочками ответы для сохранения."
+            )
+            return
+        prompt_text = self.prompt_edit.toPlainText().strip()
+        if not prompt_text:
+            QMessageBox.warning(self, "Внимание", "Введите промт перед сохранением.")
+            return
+        try:
+            if self._current_prompt_id is None:
+                self._current_prompt_id = db.prompt_create(prompt_text)
+                self._load_prompts_combo()
+            for r in selected:
+                db.result_create(self._current_prompt_id, r["model_id"], r["response"])
+            self.statusBar().showMessage(f"Сохранено: {len(selected)} выбранных ответов")
+            QMessageBox.information(self, "Сохранено", f"Сохранено ответов: {len(selected)}.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить: {e}")
 
     def _on_save(self):
         """Сохраняет текущий промт и все результаты в БД."""
@@ -340,7 +377,7 @@ class ChatListWindow(QMainWindow):
         if row < 0 or row >= len(self._temp_results):
             QMessageBox.information(self, "Выбор", "Выберите строку с ответом для просмотра.")
             return
-        r = self._temp_results[row]
+        r = self._temp_results[row] if row < len(self._temp_results) else {}
         title = f"Ответ: {r.get('model_name', 'Модель')}"
         text = r.get("response", "")
         d = MarkdownViewerDialog(self, title=title, text=text)
@@ -356,14 +393,22 @@ class ChatListWindow(QMainWindow):
         self.results_table.setRowCount(len(self._temp_results))
         for i, row in enumerate(self._temp_results):
             try:
+                cb = QCheckBox()
+                cb.setChecked(bool(row.get("selected", False)))
+                cb.stateChanged.connect(lambda state, idx=i: self._on_selection_changed(idx, state))
+                self.results_table.setCellWidget(i, 0, cb)
                 name = str(row.get("model_name", ""))[:80]
                 resp = self._sanitize_for_display(str(row.get("response", "")))
-                self.results_table.setItem(i, 0, QTableWidgetItem(name))
-                self.results_table.setItem(i, 1, QTableWidgetItem(resp))
+                self.results_table.setItem(i, 1, QTableWidgetItem(name))
+                self.results_table.setItem(i, 2, QTableWidgetItem(resp))
             except Exception:
-                self.results_table.setItem(i, 0, QTableWidgetItem("?"))
-                self.results_table.setItem(i, 1, QTableWidgetItem("(ошибка отображения)"))
+                self.results_table.setItem(i, 1, QTableWidgetItem("?"))
+                self.results_table.setItem(i, 2, QTableWidgetItem("(ошибка отображения)"))
         self.results_table.resizeRowsToContents()  # высота строк по содержимому
+
+    def _on_selection_changed(self, row_idx: int, state):
+        if 0 <= row_idx < len(self._temp_results):
+            self._temp_results[row_idx]["selected"] = state == Qt.Checked
 
     def _on_prompts_dialog(self):
         try:
@@ -376,16 +421,48 @@ class ChatListWindow(QMainWindow):
                 f"Не удалось открыть «Промты»:\n{e}",
             )
 
+    def _on_settings_dialog(self):
+        d = SettingsDialog(self)
+        if d.exec_() == QDialog.Accepted:
+            self._apply_app_theme_and_font()
+
     def _on_models_settings(self):
         d = ModelsSettingsDialog(self)
         d.exec_()
         self._load_prompts_combo()
 
+    def _apply_app_theme_and_font(self):
+        """Применяет тему и размер шрифта из БД ко всему приложению."""
+        app = QApplication.instance()
+        if not app:
+            return
+        theme = get_theme()
+        font_size = get_font_size()
+        if theme == THEME_DARK:
+            app.setStyleSheet(DARK_STYLESHEET)
+        else:
+            app.setStyleSheet("")
+        font = app.font()
+        font.setPointSize(font_size)
+        app.setFont(font)
+
     def _on_about(self):
         QMessageBox.about(
             self,
             "О программе",
-            "ChatList\n\nОтправка промтов в несколько нейросетей и сравнение ответов.",
+            "<h2>ChatList</h2>"
+            "<p>Сравнение ответов нейросетей.</p>"
+            "<p>Отправка одного промта в несколько моделей ИИ "
+            "(OpenAI, Claude, Llama, Qwen и др. через OpenRouter) "
+            "и просмотр результатов в таблице.</p>"
+            "<p><b>Возможности:</b></p>"
+            "<ul>"
+            "<li>Выбор и сохранение промтов</li>"
+            "<li>Улучшение промтов с помощью ИИ</li>"
+            "<li>Сохранение выбранных ответов в базу</li>"
+            "<li>Настройки темы и шрифта</li>"
+            "</ul>"
+            "<p>Python, PyQt5, SQLite, OpenRouter API.</p>",
         )
 
 
@@ -407,7 +484,12 @@ def main():
     sys.excepthook = _excepthook
     app = QApplication(sys.argv)
     app.setApplicationName("ChatList")
+    icon_path = Path(__file__).parent / "app.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     window = ChatListWindow()
+    if icon_path.exists():
+        window.setWindowIcon(QIcon(str(icon_path)))
     window.show()
     sys.exit(app.exec_())
 

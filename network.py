@@ -26,12 +26,14 @@ def send_prompt_to_model(
     model: Model,
     prompt: str,
     timeout: float = DEFAULT_TIMEOUT,
+    system: str | None = None,
 ) -> tuple[int, str]:
     """
     Отправляет промт к одной модели.
 
     Возвращает (model_id, response_text).
     При ошибке выбрасывает NetworkError или ApiKeyError.
+    system — опциональный системный промт.
     """
     api_key = get_api_key(model.api_id)
     if not api_key or not str(api_key).strip():
@@ -46,9 +48,13 @@ def send_prompt_to_model(
         "Content-Type": "application/json",
     }
     model_id = getattr(model, "model", None) or "gpt-3.5-turbo"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
     payload = {
         "model": model_id,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": messages,
     }
 
     try:
