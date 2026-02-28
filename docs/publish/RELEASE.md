@@ -67,12 +67,12 @@ gh release create v1.0.0 installer\ChatList-1.0.0-setup.exe --title "ChatList 1.
 ## Шаг 4. Включение GitHub Pages
 
 1. В репозитории: **Settings** → **Pages**
-2. **Source**: Deploy from a branch
-3. **Branch**: `main` (или `master`) → папка `/docs`
-4. **Save**
+2. **Source**: GitHub Actions
+3. Workflow **Deploy GitHub Pages** будет запускаться при пуше в `docs/` или вручную
 
-Через 1–2 минуты лендинг будет доступен по адресу:
-`https://<username>.github.io/<repo-name>/`
+Либо старый способ: **Deploy from a branch** → ветка `main`, папка `/docs`
+
+Лендинг: `https://<username>.github.io/<repo-name>/`
 
 ---
 
