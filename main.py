@@ -29,6 +29,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIcon
 
 import db
+import version
 from models import get_active_models
 from network import send_prompt_to_all_models
 from models_dialog import ModelsSettingsDialog
@@ -91,7 +92,7 @@ class ChatListWindow(QMainWindow):
         self._apply_app_theme_and_font()  # тема и шрифт из БД
 
     def _setup_ui(self):
-        self.setWindowTitle("ChatList")
+        self.setWindowTitle(f"ChatList {version.__version__}")
         self.setMinimumSize(700, 500)
         self.resize(900, 600)
 
@@ -450,7 +451,7 @@ class ChatListWindow(QMainWindow):
         QMessageBox.about(
             self,
             "О программе",
-            "<h2>ChatList</h2>"
+            f"<h2>ChatList {version.__version__}</h2>"
             "<p>Сравнение ответов нейросетей.</p>"
             "<p>Отправка одного промта в несколько моделей ИИ "
             "(OpenAI, Claude, Llama, Qwen и др. через OpenRouter) "
@@ -470,7 +471,7 @@ def _excepthook(exc_type, exc_value, exc_tb):
     """Перехват необработанных исключений — показывает диалог вместо тихого выхода."""
     import traceback
     msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    print(msg, file=sys.stderr)
+    print(f"[ChatList {version.__version__}] ", msg, sep="", file=sys.stderr)
     try:
         from PyQt5.QtWidgets import QApplication, QMessageBox
         app = QApplication.instance()
@@ -484,6 +485,7 @@ def main():
     sys.excepthook = _excepthook
     app = QApplication(sys.argv)
     app.setApplicationName("ChatList")
+    app.setApplicationVersion(version.__version__)
     icon_path = Path(__file__).parent / "app.ico"
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
