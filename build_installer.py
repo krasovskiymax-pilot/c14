@@ -4,6 +4,7 @@
 Версия берётся из version.py. Сначала собирается exe (build.py), затем создаётся
 установщик ChatList-{version}-setup.exe в папке installer/.
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -56,22 +57,23 @@ def main() -> int:
 
     # 1. Собрать exe, если ещё нет
     if not exe_path.exists():
-        print("Сборка исполняемого файла...")
+        print("Building executable...")
         result = subprocess.run(
             [sys.executable, str(root / "build.py")],
             cwd=root,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
         if result.returncode != 0:
-            print("Ошибка: сборка exe не удалась.")
+            print("Error: build failed.")
             return result.returncode
     else:
-        print(f"Найден: {exe_path}")
+        print(f"Found: {exe_path}")
 
     # 2. Найти Inno Setup
     iscc = _find_iscc()
     if not iscc:
         print(
-            "Ошибка: Inno Setup не найден. Установите Inno Setup 6:\n"
+            "Error: Inno Setup not found. Install Inno Setup 6:\n"
             "  https://jrsoftware.org/isinfo.php"
         )
         return 1
@@ -80,7 +82,7 @@ def main() -> int:
     iss_template = root / "ChatList.iss.in"
     iss_path = root / "ChatList.iss"
     if not iss_template.exists():
-        print("Ошибка: не найден ChatList.iss.in")
+        print("Error: ChatList.iss.in not found.")
         return 1
     iss_content = iss_template.read_text(encoding="utf-8").replace("{{VERSION}}", version_str)
     iss_path.write_text(iss_content, encoding="utf-8")
@@ -88,14 +90,14 @@ def main() -> int:
     # 4. Собрать установщик
     (root / "installer").mkdir(exist_ok=True)
     cmd = [str(iscc), str(iss_path)]
-    print(f"Сборка установщика ChatList-{version_str}-setup.exe...")
+    print(f"Building installer ChatList-{version_str}-setup.exe...")
     result = subprocess.run(cmd, cwd=root)
     if result.returncode != 0:
         return result.returncode
 
     out_file = root / "installer" / f"ChatList-{version_str}-setup.exe"
     if out_file.exists():
-        print(f"Готово: {out_file}")
+        print(f"Done: {out_file}")
     return result.returncode
 
 

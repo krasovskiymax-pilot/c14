@@ -20,12 +20,23 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Add Inno Setup to PATH
+        run: |
+          $isPath = "C:\Program Files (x86)\Inno Setup 6"
+          if (Test-Path $isPath) {
+            echo "ISCC=$isPath" >> $env:GITHUB_ENV
+            echo "$isPath" >> $env:GITHUB_PATH
+          }
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Build installer
+        env:
+          QT_QPA_PLATFORM: minimal
+          PYTHONIOENCODING: utf-8
         run: python build_installer.py
 
       - name: Create Release

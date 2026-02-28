@@ -62,7 +62,7 @@ def main() -> int:
 
     version_file = root / "version_info.txt"
     _write_version_file(version_file)
-    print(f"Сборка ChatList {version_str} -> {exe_name}.exe")
+    print(f"Building ChatList {version_str} -> {exe_name}.exe")
 
     app_ico = root / "app.ico"
     extra = []
